@@ -111,6 +111,21 @@ class InfoHunter:
         if not 'files_struct' in self.__dict__:
             if guess:
                 self.build_files_struct()
+                # guess a suitable offset for the files struct
+                offset = self.get_offset(self.task_struct, 'comm')+16
+                # the structure varies a bit, but this will do for now
+                offset += self.ptrsize*5
+                init_files_addr = self.swapaddr + offset
+                init_files = self.r2.readptr( init_files_addr )
+                while not self.is_kernel_pointer( init_files ):
+                    offset += self.ptrsize
+                    init_files_addr = self.swapaddr + offset
+                    init_files = self.r2.readptr( init_files_addr )
+                logging.info("guessed fs offset at {}".format(offset))
+                self.symbols['init_files'] = init_files
+                self.add_field( self.task_struct, 'fs', offset, 'pointer', None, 'struct', 'fs_struct' )
+                self.add_field( self.task_struct, 'files', offset+self.ptrsize, 'pointer', None, 'struct', 'files_struct' )
+
             else:
                 logging.error("No files_struct found - try using -g to guess a suitable structure")
    
