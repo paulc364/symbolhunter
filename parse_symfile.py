@@ -24,7 +24,7 @@ jdat=infile.read()
 
 jobj=json.loads(jdat)
 
-print(jobj.keys())
+#print(jobj.keys())
 
 if symtype == 'enums':
   utypes=jobj['enums']
@@ -41,7 +41,7 @@ else:
 task_struct=utypes[symtype]
 
 # convert fields into a list so we can sort
-print(type(task_struct['fields']))
+#print(type(task_struct['fields']))
 
 #fields=[ field for field in task_struct['fields'] ]
 fields=task_struct['fields']
