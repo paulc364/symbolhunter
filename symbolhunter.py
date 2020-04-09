@@ -305,17 +305,23 @@ class InfoHunter:
               # #found = self.r2.find(init_task_bytes, init_task+10 )
               # #return False
 
-          # try to find as many symbol pointers as we can
+          # The init_task string is not necessarily at the start of the table
+          # so we should search backwards to find the first string
+          string_table_start=self.find_strtab_start( init_task )
+          logging.info("Start of string table found at {:x}".format(string_table_start))
+          
+          # try to find as many strings as we can
           if (found != -1): #func_ptr_table == -1):
-              (symstrings, patt, string_offsets) = self.strtab_pattern_fetch( init_task )
+              (symstrings, patt, string_offsets) = self.strtab_pattern_fetch( string_table_start )
               num_of_strings = len(symstrings)
               logging.info("{} strings found in table".format(num_of_strings))
+
+              endoff=string_offsets[-1]+len(symstrings[-1])+1
+              strend=string_table_start+endoff
 
               if (num_of_strings < 64): # some arbitrary number
                   logging.debug("table was {}".format(symstrings))
                   # some string tables have gaps, so try to span those
-                  endoff=string_offsets[-1]+len(symstrings[-1])+1
-                  strend=init_task+endoff
                   strend=strend+self.ptrsize-(strend%self.ptrsize)
                   skipcount=0
                   while skipcount < 10:
@@ -325,8 +331,8 @@ class InfoHunter:
                             logging.info("skipped {} non-strings".format(skipcount))
 
                           skipcount=0
-                          # adjust offsets to be relative to init_task
-                          shift=strend-init_task
+                          # adjust offsets to be relative to start of table
+                          shift=strend-string_table_start
                          
                           logging.debug("strings at {:x} : {}".format(strend,ss))
                           endoff2=stroff2[-1]+len(ss[-1])+1
@@ -362,9 +368,13 @@ class InfoHunter:
         if (found != -1):
             # we now have a list of strings and their offsets
             # in theory these are the symbols in the ksymtab
+            # now find the start of the symbol pointers
+            symtab_start = self.find_ptrtab_start( init_ptr, string_table_start, strend )
+            logging.info("start of symtab: {:x}".format( symtab_start ))
+            
             # so now fetch the rest of the ptr table starting at the pointer to init_task
             # and check everything points into the table 
-            ptr_tab = self.r2.readptr( init_ptr-self.ptrsize, num_of_strings*2)
+            ptr_tab = self.r2.readptr( symtab_start-self.ptrsize, num_of_strings*2)
             logging.info("read {0} pointers (requested {1})".format( len(ptr_tab), num_of_strings*2 ))
             # the table consists of symbol_ptr, string_ptr
             # so the string pointers are every other one
@@ -373,7 +383,50 @@ class InfoHunter:
             self.symbols = self.verify_symtab_alt( ptr_tab, symstrings, string_offsets )
             #    logging.info("ksymtab found at 0x{:x}".format( init_ptr-self.ptrsize))
 
-
+    def is_symbol_string( self, symstr ):
+        '''
+        Returns True if the supplied symstr contains only characters suitable for a C identifier
+        Namely A-Za-z0-9_
+        '''
+        for ch in symstr:
+            if not (((ch >= 'A') and (ch <='Z')) or ((ch >= 'a') and (ch <= 'z')) or ((ch >= '0') and (ch <='9')) or (ch == '_')):
+                return False
+        return True
+        
+    def find_strtab_start( self, startaddr ):
+        '''
+        Search backwards from startaddr for further strings
+        '''
+        first_string=startaddr
+        addr=startaddr
+        while True:
+            prevbyte=self.r2.read( addr-1, 1 )
+            if prevbyte != b'\x00':
+                break
+            prevnul=self.r2.rfind(b'\x00', addr-2)
+            prevstr=self.r2.readstr( prevnul+1 )
+            if (prevnul+1+len(prevstr)+1 == addr) and self.is_symbol_string( prevstr ):
+                # this is a string that finishes just before the next one
+                first_string = prevnul+1
+                addr = prevnul+1
+            else:
+                break
+        return first_string
+        
+    def find_ptrtab_start( self, startaddr, string_min, string_max ):
+        '''
+        Given a pointer somewhere in the symbol table, search backwards for 
+        the start of the table. pointers to strings should be in the range given
+        '''
+        first_addr = startaddr
+        ptr = self.r2.readptr( startaddr )
+        addr = startaddr
+        while (ptr >= string_min) and (ptr <= string_max):
+            first_addr = addr
+            addr -= self.ptrsize * 2
+            ptr = self.r2.readptr( addr )
+        return first_addr
+        
     def verify_symtab_alt( self, ptr_tab, symstrings, string_offsets ):
         verified=0
         syms={}
